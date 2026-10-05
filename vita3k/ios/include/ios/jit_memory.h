@@ -63,6 +63,7 @@ public:
 private:
     JitMemory() = default;
     void shutdown_locked();
+    void fail_locked(const std::string &why);
 
     struct Block {
         size_t offset;
@@ -75,6 +76,9 @@ private:
     size_t allocated_bytes_ = 0;
     bool is_prepared_ = false;
     JitMappingMode mapping_mode_ = JitMappingMode::DualMap;
+    /// Why the last prepare() attempt gave up (empty after a success).
+    /// Surfaced by describe() so the on-device report is self-explanatory.
+    std::string last_error_;
     mutable std::mutex mutex_;
     std::vector<Block> live_blocks_;
     std::vector<Block> free_blocks_;

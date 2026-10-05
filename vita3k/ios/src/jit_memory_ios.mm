@@ -152,31 +152,44 @@ int cs_debugged_state() {
 
 bool JitMemory::prepare(size_t reservation_bytes) {
     const size_t size = aligned_size(reservation_bytes);
-    if (size == 0)
+    if (size == 0) {
+        std::lock_guard guard(mutex_);
+        fail_locked("invalid reservation size");
         return false;
+    }
     std::lock_guard guard(mutex_);
     if (is_prepared_ && size <= reservation_bytes_)
         return true;
     if (!live_blocks_.empty()) {
         LOG_ERROR("JitMemory: cannot replace reservation with live slices");
+        fail_locked("cannot replace reservation with live slices");
         return false;
     }
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
-    if (is_cs_debugged() != 1) {
+    const int cs = is_cs_debugged();
+    if (cs != 1) {
         LOG_INFO("JitMemory: JIT unavailable; launch via StikDebug");
+        fail_locked(fmt::format("cs_debugged={} (no debugger attached; launch through StikDebug)", cs));
         return false;
     }
 #endif
 
     LOG_INFO("JitMemory: preparing reservation ({} bytes)", size);
-    // The dual-map arena is the only path validated on device (iOS 26/TXM
-    // denies MAP_JIT outright). Keep it the default on every iOS version:
-    // the old symbol probe silently switched iOS 18 processes to MAP_JIT,
-    // whose per-thread write protection this code never toggles.
+    // MAP_JIT first: it is the path that works on iOS 14-18 as soon as a
+    // debugger has set CS_DEBUGGED, and oaknut's
+    // CodeBlock(ProtectMode::MapJit) already toggles
+    // pthread_jit_write_protect_np per thread around every code write. On
+    // iOS 26 / TXM the kernel refuses MAP_JIT (EPERM), so we fall through to
+    // the dual-map arena granted out-of-band by the StikDebug brk protocol.
+    // VITA3K_JIT_NO_MAPJIT=1 forces the dual-map path for debugging.
     void* rx = MAP_FAILED;
-    if (const char* map_jit_env = std::getenv("VITA3K_JIT_MAPJIT"); map_jit_env && *map_jit_env == '1' && dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np")) {
+    const char* no_mapjit = std::getenv("VITA3K_JIT_NO_MAPJIT");
+    const bool map_jit_allowed = !(no_mapjit && *no_mapjit == '1');
+    if (map_jit_allowed && dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np")) {
         rx = mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC,
             MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
+        if (rx == MAP_FAILED)
+            LOG_INFO("JitMemory: MAP_JIT refused (errno={}); trying the debugger-granted dual-map arena", errno);
     }
     if (rx != MAP_FAILED) {
         shutdown_locked();
@@ -184,6 +197,7 @@ bool JitMemory::prepare(size_t reservation_bytes) {
         reservation_bytes_ = size;
         mapping_mode_ = JitMappingMode::MapJit;
         is_prepared_ = true;
+        last_error_.clear();
         LOG_INFO("JitMemory: MAP_JIT ready (rx=rw=0x{:x}, size={})", rx_base_, size);
         return true;
     }
@@ -191,12 +205,14 @@ bool JitMemory::prepare(size_t reservation_bytes) {
     rx = mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (rx == MAP_FAILED) {
         LOG_ERROR("JitMemory: mmap RX failed (errno={})", errno);
+        fail_locked(fmt::format("MAP_JIT unavailable and mmap RX failed (errno={})", errno));
         return false;
     }
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
     if (!prepare_with_debugger(rx, size)) {
         LOG_ERROR("JitMemory: preparation failed; select the universal script in StikDebug and relaunch");
         munmap(rx, size);
+        fail_locked("the debugger rejected the brk JIT grant (StikDebug script not armed for this process)");
         return false;
     }
 #endif
@@ -209,12 +225,14 @@ bool JitMemory::prepare(size_t reservation_bytes) {
     if (kr != KERN_SUCCESS) {
         LOG_ERROR("JitMemory: vm_remap failed (kr=0x{:x})", kr);
         munmap(rx, size);
+        fail_locked(fmt::format("vm_remap of the RW alias failed (kr=0x{:x})", kr));
         return false;
     }
     if (mprotect(reinterpret_cast<void*>(rw), size, PROT_READ | PROT_WRITE) != 0) {
         LOG_ERROR("JitMemory: mprotect RW failed (errno={})", errno);
         vm_deallocate(mach_task_self(), rw, size);
         munmap(rx, size);
+        fail_locked(fmt::format("mprotect of the RW alias failed (errno={})", errno));
         return false;
     }
     shutdown_locked();
@@ -223,6 +241,7 @@ bool JitMemory::prepare(size_t reservation_bytes) {
     reservation_bytes_ = size;
     mapping_mode_ = JitMappingMode::DualMap;
     is_prepared_ = true;
+    last_error_.clear();
     LOG_INFO("JitMemory: reservation ready (rx=0x{:x}, rw=0x{:x}, size={})", rx_base_, rw_base_, size);
     return true;
 }
@@ -358,9 +377,14 @@ size_t JitMemory::allocated_bytes() const {
 
 std::string JitMemory::describe() const {
     std::lock_guard guard(mutex_);
-    return fmt::format("prepared: {}\nmode: {}\nrx: 0x{:x}\nrw:  0x{:x}\nreservation: {} bytes\nallocated: {} bytes\nfree:    {} bytes\nfree slices: {}",
+    return fmt::format("prepared: {}\nmode: {}\nrx: 0x{:x}\nrw:  0x{:x}\nreservation: {} bytes\nallocated: {} bytes\nfree:    {} bytes\nfree slices: {}\ncs_debugged: {}\nlast error: {}",
         is_prepared_ ? "yes" : "no", mapping_mode_ == JitMappingMode::MapJit ? "mapjit" : "dualmap",
-        rx_base_, rw_base_, reservation_bytes_, allocated_bytes_, reservation_bytes_ - allocated_bytes_, free_blocks_.size());
+        rx_base_, rw_base_, reservation_bytes_, allocated_bytes_, reservation_bytes_ - allocated_bytes_, free_blocks_.size(),
+        cs_debugged_state(), last_error_.empty() ? std::string("(none)") : last_error_);
+}
+
+void JitMemory::fail_locked(const std::string &why) {
+    last_error_ = why;
 }
 
 } // namespace vita::ios
