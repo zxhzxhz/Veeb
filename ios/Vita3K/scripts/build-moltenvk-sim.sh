@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a static MoltenVK slice for the iOS SIMULATOR (arm64, deployment 26.0).
+# Build a static MoltenVK slice for the iOS SIMULATOR (arm64, deployment 18.0).
 #
 # The MoltenVK v1.4.1 release ships an XCFramework with only the `ios-arm64`
 # (device) slice; there is no simulator slice in the release. Step 7 of the
@@ -74,10 +74,10 @@ if [ ! -f "$OUT/libMoltenVK.a" ] || [ "${FORCE:-0}" = "1" ]; then
   cmake -S "$SRC" -B "$BUILD" \
     -G Ninja \
     -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_SYSTEM_VERSION=26.0 \
+    -DCMAKE_SYSTEM_VERSION=18.0 \
     -DCMAKE_OSX_SYSROOT=iphonesimulator \
     -DCMAKE_OSX_ARCHITECTURES=arm64 \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
     -DCMAKE_BUILD_TYPE=Release \
     -DMVK_BUILD_STATIC=ON \
     -DMVK_EXCLUDE_SPIRV_TOOLS=ON

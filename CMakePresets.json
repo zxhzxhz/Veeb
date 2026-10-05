@@ -212,7 +212,7 @@
       "name": "ios-device",
       "inherits": "base",
       "displayName": "iOS device (arm64)",
-      "description": "Cross-compile the Vita3K core for iOS devices (iphoneos SDK, deployment target 26.0). Consumed by the Xcode app in ios/Vita3K.",
+      "description": "Cross-compile the Vita3K core for iOS devices (iphoneos SDK, deployment target 18.0). Consumed by the Xcode app in ios/Vita3K.",
       "generator": "Ninja",
       "toolchainFile": "${sourceDir}/cmake/ios-device.cmake",
       "condition": {

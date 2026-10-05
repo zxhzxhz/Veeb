@@ -1,42 +1,141 @@
-name: iOS CI
+# Veeb — iOS build (this fork: iOS 18.0 deployment target).
+#
+# Why this file was rewritten: the upstream workflow called
+# `bash .ci/build-ios.sh`, but the `.ci/` helper directory is NOT part of the
+# published tree (https://github.com/veebteam/Veeb/tree/main/.ci returns 404,
+# and `git ls-files .ci` is empty), so every upstream iOS run died with
+# "No such file or directory". The steps below inline the same pipeline that
+# .ci/apple-build-common.sh + build-ios.sh performed:
+#
+#   CMake (core dylib) -> stage-core.sh (stage + xcodegen) -> xcodebuild
+#
+# Signing is intentionally disabled: CI has no certificate or provisioning
+# profile. The artifact is an UNSIGNED device IPA, which LiveContainer (or
+# Sideloadly/AltStore) re-signs on install. Remember that the re-sign step must
+# keep `get-task-allow` so StikDebug can hand out the JIT grant.
+
+name: iOS build
 
 on:
   push:
+    branches: ['**']
     paths-ignore:
       - '**.md'
+      - '_readme/**'
   pull_request:
-    paths-ignore:
-      - '**.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VEEB_JOBS: "4"
 
 jobs:
-  ios-simulator:
-    name: iOS core + app (simulator arm64)
+  device:
+    name: iOS device core + app (unsigned IPA)
     runs-on: macos-latest
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          # external/* is vendored into the tree (27931 tracked files, zero
+          # gitlinks), so submodule fetching is neither needed nor possible.
+          submodules: false
 
-      - name: Setup toolchain
+      - name: Toolchain
         run: |
+          set -euo pipefail
           xcodebuild -version
-          brew install ninja python@3.12
+          cmake --version | head -1
+          brew install ninja xcodegen ccache
 
-      - name: Build core + app (simulator)
-        run: bash .ci/build-ios.sh simulator
-
-  ios-device:
-    name: iOS core + app (device arm64)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
+      - name: Restore ccache
+        uses: actions/cache@v4
         with:
-          submodules: recursive
+          path: ~/Library/Caches/ccache
+          key: ios-device-ccache-${{ github.sha }}
+          restore-keys: ios-device-ccache-
 
-      - name: Setup toolchain
+      - name: Configure core
         run: |
-          xcodebuild -version
-          brew install ninja python@3.12
+          set -euo pipefail
+          ccache --set-config=max_size=3G
+          ccache -z
+          # USE_LTO=NEVER: the preset defaults to RELEASE_ONLY, and full LTO of
+          # the whole emulator core does not fit a 3-vCPU runner's budget.
+          cmake --preset ios-device \
+            -DUSE_LTO=NEVER \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache
 
-      - name: Build core + app (device)
-        run: bash .ci/build-ios.sh device
+      - name: Build core
+        run: cmake --build --preset ios-device --target vita3k --parallel "$VEEB_JOBS"
+
+      - name: ccache stats
+        if: always()
+        run: ccache -s
+
+      - name: Stage core and generate the Xcode project
+        run: ios/Vita3K/scripts/stage-core.sh device
+
+      - name: Build app (unsigned)
+        run: |
+          set -euo pipefail
+          xcodebuild -project ios/Vita3K/Vita3K.xcodeproj -scheme Vita3K \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios-app -jobs "$VEEB_JOBS" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Report deployment targets
+        run: |
+          APP=build/ios-app/Build/Products/Release-iphoneos/Vita3K.app
+          echo "===== core dylib ====="
+          otool -l build/ios-device/vita3k/libVita3KCore.dylib \
+            | grep -A5 -E 'LC_BUILD_VERSION|LC_VERSION_MIN_IPHONEOS' || true
+          echo "===== app executable ====="
+          otool -l "$APP/Vita3K" \
+            | grep -A5 -E 'LC_BUILD_VERSION|LC_VERSION_MIN_IPHONEOS' || true
+          echo "===== nested dylib ====="
+          otool -l "$APP/Frameworks/libVita3KCore.dylib" \
+            | grep -A5 -E 'LC_BUILD_VERSION|LC_VERSION_MIN_IPHONEOS' || true
+          echo "===== Info.plist ====="
+          plutil -p "$APP/Info.plist" | grep -iE 'minimum|bundle(display)?name|executable' || true
+          echo "===== bundle ====="
+          ls -lh "$APP" | head -20
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP=build/ios-app/Build/Products/Release-iphoneos/Vita3K.app
+          test -d "$APP"
+          rm -rf build/ipa
+          mkdir -p build/ipa/Payload
+          # Same rename the upstream build-ios.sh applies: the bundle directory
+          # becomes Veeb.app, the inner executable keeps CFBundleExecutable.
+          ditto "$APP" build/ipa/Payload/Veeb.app
+          (cd build/ipa && zip -qry Veeb-ios18-unsigned.ipa Payload)
+          unzip -l build/ipa/Veeb-ios18-unsigned.ipa | head -20
+          ls -lh build/ipa/Veeb-ios18-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Veeb-ios18-unsigned-ipa
+          path: build/ipa/Veeb-ios18-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Veeb-ios18-build-logs
+          path: |
+            build/ios-device/CMakeCache.txt
+            build/ios-device/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: ignore
+          retention-days: 7

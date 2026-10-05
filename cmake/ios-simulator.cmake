@@ -7,13 +7,13 @@
 # device one: even though both are arm64, the SDKs (and their system libraries)
 # are different and the artifacts are not interchangeable.
 set(CMAKE_SYSTEM_NAME iOS)
-set(CMAKE_SYSTEM_VERSION 26.0)
+set(CMAKE_SYSTEM_VERSION 18.0)
 # Some dependencies test ${CMAKE_SYSTEM_PROCESSOR} unquoted; keep it defined.
 set(CMAKE_SYSTEM_PROCESSOR arm64)
 
 set(CMAKE_OSX_SYSROOT iphonesimulator)
 set(CMAKE_OSX_ARCHITECTURES arm64)
-set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0)
+set(CMAKE_OSX_DEPLOYMENT_TARGET 18.0)
 
 # The iOS adapters (bridge, frame host, JIT arena) are Objective-C++; the root
 # CMakeLists enables OBJCXX for the build (enable_language cannot run inside a

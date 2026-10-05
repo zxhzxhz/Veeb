@@ -28,7 +28,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # iOS is a cross target: the toolchain file already set the deployment target
 # and this line must not overwrite it with the macOS value.
 if(IOS)
-	set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0)
+	set(CMAKE_OSX_DEPLOYMENT_TARGET 18.0)
 else()
 	set(CMAKE_OSX_DEPLOYMENT_TARGET 13.3)
 endif()

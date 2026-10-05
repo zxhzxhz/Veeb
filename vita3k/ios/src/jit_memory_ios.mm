@@ -169,9 +169,12 @@ bool JitMemory::prepare(size_t reservation_bytes) {
 #endif
 
     LOG_INFO("JitMemory: preparing reservation ({} bytes)", size);
-    // Only adopt MAP_JIT when its write protection can also be controlled.
+    // The dual-map arena is the only path validated on device (iOS 26/TXM
+    // denies MAP_JIT outright). Keep it the default on every iOS version:
+    // the old symbol probe silently switched iOS 18 processes to MAP_JIT,
+    // whose per-thread write protection this code never toggles.
     void* rx = MAP_FAILED;
-    if (dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np")) {
+    if (const char* map_jit_env = std::getenv("VITA3K_JIT_MAPJIT"); map_jit_env && *map_jit_env == '1' && dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np")) {
         rx = mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC,
             MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
     }

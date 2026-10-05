@@ -7,13 +7,13 @@ name: Vita3K
 options:
   bundleIdPrefix: dev.vita3k
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "18.0"
   createIntermediateGroups: true
   developmentLanguage: en
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
   configs:
     Release:
       SWIFT_OPTIMIZATION_LEVEL: "-O"

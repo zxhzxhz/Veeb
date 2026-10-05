@@ -6,14 +6,14 @@
 # The toolchain file sets everything CMake needs *before* project() runs, so the
 # 13.3 macOS deployment target in the root CMakeLists cannot leak into the iOS build.
 set(CMAKE_SYSTEM_NAME iOS)
-set(CMAKE_SYSTEM_VERSION 26.0)
+set(CMAKE_SYSTEM_VERSION 18.0)
 # Some dependencies test ${CMAKE_SYSTEM_PROCESSOR} unquoted; keep it defined.
 set(CMAKE_SYSTEM_PROCESSOR arm64)
 
 # iphoneos = device SDK. Never mix with the simulator SDK in the same build tree.
 set(CMAKE_OSX_SYSROOT iphoneos)
 set(CMAKE_OSX_ARCHITECTURES arm64)
-set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0)
+set(CMAKE_OSX_DEPLOYMENT_TARGET 18.0)
 
 # The iOS adapters (bridge, frame host, JIT arena) are Objective-C++; the root
 # CMakeLists enables OBJCXX for the build (enable_language cannot run inside a
